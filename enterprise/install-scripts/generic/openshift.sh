@@ -1684,6 +1684,14 @@ configure_named()
     dnssec-keygen -a HMAC-MD5 -b 512 -n USER -r /dev/urandom ${domain}
     bind_key="$(grep Key: K${domain}*.private | cut -d ' ' -f 2)"
     popd
+  else
+    if [ "x$named_ip_addr" = x]
+    then
+      echo "Received a predefined key to use with bind but the ip address has not been defined"
+      abort_install()
+    else
+      remote_bind=1
+    fi
   fi
 
   # Ensure we have a key for service named status to communicate with BIND.
@@ -1704,32 +1712,6 @@ EOF
   rm -rf /var/named/dynamic
   mkdir -p /var/named/dynamic
 
-
-  # Create the initial BIND database.
-  nsdb=/var/named/dynamic/${domain}.db
-  cat <<EOF > $nsdb
-\$ORIGIN .
-\$TTL 1	; 1 seconds (for testing only)
-${domain}		IN SOA	${named_hostname}. hostmaster.${domain}. (
-				2011112904 ; serial
-				60         ; refresh (1 minute)
-				15         ; retry (15 seconds)
-				1800       ; expire (30 minutes)
-				10         ; minimum (10 seconds)
-				)
-			NS	${named_hostname}.
-			MX	10 mail.${domain}.
-\$ORIGIN ${domain}.
-${named_hostname%.${domain}}			A	${named_ip_addr}
-EOF
-
-  # Add A records any other components that are being installed locally.
-  broker && echo "${broker_hostname%.${domain}}			A	${broker_ip_addr}" >> $nsdb
-  node && echo "${node_hostname%.${domain}}			A	${node_ip_addr}${nl}" >> $nsdb
-  activemq && echo "${activemq_hostname%.${domain}}			A	${cur_ip_addr}${nl}" >> $nsdb
-  datastore && echo "${datastore_hostname%.${domain}}			A	${cur_ip_addr}${nl}" >> $nsdb
-  echo >> $nsdb
-
   # Install the key for the OpenShift Enterprise domain.
   cat <<EOF > /var/named/${domain}.key
 key ${domain} {
@@ -1737,6 +1719,51 @@ key ${domain} {
   secret "${bind_key}";
 };
 EOF
+
+  # Creating necessary Host entries for the OpenShift environment
+  if [ "$remote_bind" == "1" ]
+  then
+    # Create the initial BIND database.
+    nsdb=/var/named/dynamic/${domain}.db
+    cat <<EOF > $nsdb
+\$ORIGIN .
+\$TTL 1 ; 1 seconds (for testing only)
+${domain}   IN SOA  ${named_hostname}. hostmaster.${domain}. (
+        2011112904 ; serial
+        60         ; refresh (1 minute)
+        15         ; retry (15 seconds)
+        1800       ; expire (30 minutes)
+        10         ; minimum (10 seconds)
+        )
+      NS  ${named_hostname}.
+      MX  10 mail.${domain}.
+\$ORIGIN ${domain}.
+${named_hostname%.${domain}}      A ${named_ip_addr}
+EOF
+
+    # Add A records any other components that are being installed locally.
+    broker && echo "${broker_hostname%.${domain}}     A ${broker_ip_addr}" >> $nsdb
+    node && echo "${node_hostname%.${domain}}     A ${node_ip_addr}${nl}" >> $nsdb
+    activemq && echo "${activemq_hostname%.${domain}}     A ${cur_ip_addr}${nl}" >> $nsdb
+    datastore && echo "${datastore_hostname%.${domain}}     A ${cur_ip_addr}${nl}" >> $nsdb
+    echo >> $nsdb
+
+  else
+    ns_upd="/tmp/remote_bind_config"
+    echo "server ${$named_ip_addr}" > $ns_upd
+    broker && echo "update delete ${broker_hostname%.${domain}} A" >> $ns_upd
+    broker && echo "update add ${broker_hostname%.${domain}} 60 A ${broker_ip_addr}" >> $ns_upd
+    node && echo "update delete ${node_hostname%.${domain}} A" >> $ns_upd
+    node && echo "update add ${node_hostname%.${domain}} 60 A ${node_ip_addr}" >> $ns_upd
+    activemq && echo "update delete ${activemq_hostname%.${domain}} A" >> $ns_upd
+    activemq && echo "update add ${activemq_hostname%.${domain}} 60 A ${cur_ip_addr}" >> $ns_upd
+    datastore && echo "update delete ${datastore_hostname%.${domain}} A" >> $ns_upd
+    datastore && echo "update add ${datastore_hostname%.${domain}} 60 A ${cur_ip_addr}" >> $ns_upd
+    echo "send" >> $ns_upd
+
+    # Send the file to nsupdate
+    nsupdate -k /var/named/${domain}.key $ns_upd
+  fi
 
   chgrp named -R /var/named
   chown named -R /var/named/dynamic
