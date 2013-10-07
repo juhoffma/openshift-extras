@@ -1685,7 +1685,7 @@ configure_named()
     bind_key="$(grep Key: K${domain}*.private | cut -d ' ' -f 2)"
     popd
   else
-    if [ "x$named_ip_addr" = x]
+    if [ -z "${CONF_NAMED_IP_ADDR}" ]
     then
       echo "Received a predefined key to use with bind but the ip address has not been defined"
       abort_install()
@@ -1721,7 +1721,7 @@ key ${domain} {
 EOF
 
   # Creating necessary Host entries for the OpenShift environment
-  if [ "$remote_bind" == "1" ]
+  if [ "${remote_bind}" != "1" ]
   then
     # Create the initial BIND database.
     nsdb=/var/named/dynamic/${domain}.db
@@ -1762,7 +1762,7 @@ EOF
     echo "send" >> $ns_upd
 
     # Send the file to nsupdate
-    nsupdate -k /var/named/${domain}.key $ns_upd
+    nsupdate -k ${keyfile} $ns_upd
   fi
 
   chgrp named -R /var/named
